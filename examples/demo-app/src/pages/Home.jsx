@@ -18,8 +18,8 @@ export default function Home() {
             Tidepool collects readings from tide gauges and buoys and turns them into one calm, clear view.
           </p>
           <div className="hero-actions">
-            <Link className="button" to="/pricing">See pricing</Link>
-            <Link className="button button-ghost" to="/dashboard">Open the demo dashboard</Link>
+            <Link className="button" to="/dashboard">Open the demo dashboard</Link>
+            <Link className="button button-ghost" to="/pricing">See pricing</Link>
           </div>
         </div>
       </section>

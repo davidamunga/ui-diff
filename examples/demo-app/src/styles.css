@@ -3,7 +3,7 @@
   --surface: #ffffff;
   --surface-2: #eef2f1;
   --text: #14201e;
-  --muted: #5b6b68;
+  --muted: #a0aba9;
   --border: #dde4e2;
   --accent: #0f766e;
   --accent-hover: #115e59;
@@ -133,7 +133,7 @@ main { flex: 1; }
 .stat-delta.down { color: var(--danger); }
 
 .bars { display: flex; align-items: flex-end; gap: 8px; height: 180px; padding-top: 8px; }
-.bar { flex: 1; background: var(--accent); border-radius: 6px 6px 2px 2px; opacity: 0.85; min-height: 4px; }
+.bar { flex: 1; background: var(--accent); border-radius: 6px 6px 2px 2px; opacity: 0.55; min-height: 4px; }
 
 .table { width: 100%; border-collapse: collapse; }
 .table th, .table td { text-align: left; padding: 12px 8px; border-bottom: 1px solid var(--border); }

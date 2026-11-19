@@ -26,7 +26,7 @@ export default function Pricing() {
             highlight={p.highlight}
             footer={<button className={p.highlight ? 'button button-block' : 'button button-ghost button-block'}>{p.cta}</button>}
           >
-            {p.highlight && <span className="badge">Most popular</span>}
+            {p.highlight && <span className="badge">Best for teams</span>}
             <div className="price">
               {p.price}
               <span className="price-period">{p.period}</span>
