@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>noisy</title>
+<style>body { font: 16px sans-serif; margin: 40px; } h1 { color: #1f2937; margin-top: 400px; }</style></head>
+<body>
+  <div class="live" style="width:240px;height:120px"></div>
+  <script>
+    const [r, g, b] = crypto.getRandomValues(new Uint8Array(3));
+    const box = document.querySelector(".live");
+    box.style.background = `rgb(${r}, ${g}, ${b})`;
+    box.textContent = "live " + r;
+  </script>
+  <h1>Steady heading</h1>
+</body>
+</html>

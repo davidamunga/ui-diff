@@ -10,7 +10,7 @@
 // Rerun after writing summary.md to include it.
 const fs = require('fs');
 const path = require('path');
-const { args } = require('./lib.cjs');
+const { args, noiseNote } = require('./lib.cjs');
 
 const a = args();
 if (!a.report) {
@@ -89,13 +89,13 @@ function changed(i) {
   const zoomed = (i.regions || []).filter((r) => r.zoom);
   const zooms = zoomed.length
     ? `<h3>Changed areas</h3><div class="zooms">${zoomed.map((r, n) => `
-      <figure class="zoom"><figcaption>Area ${n + 1} <span>${r.width}×${r.height} at ${r.x},${r.y}</span></figcaption>
+      <figure class="zoom"><figcaption>Area ${n + 1}${r.annotation ? ` · <strong>${r.annotation.kind === 'flow' ? '🔀 Flow change' : 'Visual only'}</strong>${r.annotation.note ? ` · ${esc(r.annotation.note)}` : ''}` : ''} <span>${r.width}×${r.height} at ${r.x},${r.y}</span></figcaption>
         <div class="trio${r.zoom.flip ? ' four' : ''}">${['before', 'after', 'diff', 'flip'].filter((s) => r.zoom[s]).map((s) => `<div><span class="cap">${s === 'flip' ? 'animated' : s}</span>${img(r.zoom[s], `${s === 'flip' ? 'before, then after (animated)' : s}, area ${n + 1}`)}</div>`).join('')}</div>
       </figure>`).join('')}</div>`
     : '';
   const more = i.regionsOmitted ? `<p class="muted">+${i.regionsOmitted} more changed area${i.regionsOmitted > 1 ? 's' : ''}; see the full page.</p>` : '';
   return `
-    <p class="muted">${i.percent}% of pixels changed${size}</p>${warnings(i)}${problems(i)}
+    <p class="muted">${i.percent}% of pixels changed${size}${noiseNote(i) ? ` · ${esc(noiseNote(i))}` : ''}</p>${warnings(i)}${problems(i)}
     <div class="controls" role="group" aria-label="View">
       <button type="button" data-mode="slider" aria-pressed="true">Slider</button>
       <button type="button" data-mode="side" aria-pressed="false">Side by side</button>
@@ -283,7 +283,7 @@ ${nav.map(({ i, mark, render }) => `<section class="item" id="${id(i)}" data-fil
   <h2>${mark}<code>${esc(i.route || i.name)}</code> — ${esc(label(i))}</h2>${render(i)}
 </section>`).join('\n')}` : '<p class="empty">No visual changes in the pages checked.</p>'}
 ${errors.length ? `<section class="rest"><h3>⚠️ Failed to capture (${errors.length})</h3>${listOf(errors, (i) => `: ${esc(i.error)}`)}</section>` : ''}
-${same.length ? `<section class="rest"><h3>No visual change (${same.length})</h3>${listOf(same, (i) => (i.warnings ? ` <span class="warn">⚠️ ${esc(i.warnings.join('; '))}</span>` : ''))}</section>` : ''}
+${same.length ? `<section class="rest"><h3>No visual change (${same.length})</h3>${listOf(same, (i) => (noiseNote(i) ? ` <span class="muted">(${esc(noiseNote(i))})</span>` : '') + (i.warnings ? ` <span class="warn">⚠️ ${esc(i.warnings.join('; '))}</span>` : ''))}</section>` : ''}
 <p class="muted">Generated with the ui-diff skill. ← / → switch pages.</p>
 </main>
 <script>${nav.length ? JS : ''}</script>

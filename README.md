@@ -38,8 +38,10 @@ for CI.
 
 - **Finds the affected pages** from the changed files: it reads your framework's routes (Next.js, SvelteKit, Nuxt, Astro, Remix/React Router, plain HTML) and follows imports from changed components, through aliases and workspace packages, to the pages that use them.
 - **Renders base and head side by side** in git worktrees on free ports. Your checkout and your other running servers are left alone.
-- **Screenshots** each page on desktop and an emulated iPhone (dark mode optional), with animations frozen so the shots are reproducible.
+- **Screenshots** each page on desktop and an emulated iPhone (dark mode optional), with animations frozen, the clock started at the same moment on both sides and `Math.random` seeded, so the shots are reproducible.
+- **Ignores noise:** each changed page is loaded on base a second time, and whatever differs between those two loads (a carousel, a live counter, a rotating ad) is left out instead of being reported as your change.
 - **Shows each change as an animation** that flips between before and after, inline in the PR comment, with the still pair one click away.
+- **Tags each change as a flow change or visual only**, right on the animation, with a one-line note: a new field, a button that now goes somewhere else, reordered actions, a new or removed page. The agent can rewrite the notes; in CI they're written from the measured changes.
 - **Measures** every element's computed styles: `padding 8px 14px → 12px 20px`, `#2563eb → #7c3aed`, layout shifts, copy changes and new WCAG contrast failures.
 - **Flags likely bugs the PR introduces:** clipped text, sideways scrolling on mobile, overlapping elements, controls pushed off-screen, tap targets that are too small, and accessibility violations (axe-core). Problems that already existed on base aren't reported.
 - **Writes a design summary** from those measurements, leading with what looks unintended.
@@ -339,6 +341,7 @@ skills/ui-diff/
 │   ├── stylediff.cjs           measured style/layout/copy/contrast changes
 │   ├── figma-export.cjs        export a Figma frame as PNG (REST API, FIGMA_TOKEN)
 │   ├── compare.cjs             design vs implementation: composite, regions, zooms
+│   ├── annotate.cjs            "Flow change" / "Visual only" tag + note on each animation
 │   ├── viewer.cjs              local before/after review page (index.html)
 │   ├── publish.sh              push images to the assets branch
 │   ├── prune.sh                remove a closed PR's images from it

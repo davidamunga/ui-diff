@@ -281,6 +281,8 @@ if [ "$SB" = 0 ]; then
 fi
 [ -n "$VIEWPORTS" ] && CAP+=(--viewports "$VIEWPORTS")
 [ -n "$SCHEMES" ] && CAP+=(--schemes "$SCHEMES")
+# One start time for every page clock, so dates and "5 minutes ago" match on base and head.
+CAP+=(--time "$(node -e 'console.log(Date.now())')")
 log "capturing…"
 node "$S/capture.cjs" --url "http://localhost:$BASE_PORT" --out "$WORK/shots/before" ${CAP_BASE[@]+"${CAP_BASE[@]}"} ${CAP[@]+"${CAP[@]}"} 2> "$WORK/capture-base.log" > /dev/null &
 C1=$!
@@ -289,10 +291,29 @@ C2=$!
 wait "$C1" || { cat "$WORK/capture-base.log" >&2; die "base capture failed"; }
 wait "$C2" || { cat "$WORK/capture-head.log" >&2; die "head capture failed"; }
 
-DIFF=()
+DIFF=() SDIFF=()
 [ "$(cfg animate)" = false ] && DIFF+=(--no-animate)
+# Load the changed captures on base a second time: whatever differs between two loads of the
+# same code (carousels, live data, lazy images) is noise, not this PR.
+if [ "$(cfg recheck)" != false ]; then
+  CHANGED="$(node "$S/diff.cjs" --before "$WORK/shots/before" --after "$WORK/shots/after" --out "$WORK/report" --dry |
+    node -e 'console.log(JSON.parse(require("fs").readFileSync(0, "utf8")).join(","))')"
+  if [ -n "$CHANGED" ]; then
+    log "re-checking $(echo "$CHANGED" | tr ',' '\n' | wc -l | tr -d ' ') changed capture(s) on base for noise…"
+    if node "$S/capture.cjs" --url "http://localhost:$BASE_PORT" --out "$WORK/shots/before-recheck" --only "$CHANGED" --no-checks \
+        ${CAP_BASE[@]+"${CAP_BASE[@]}"} ${CAP[@]+"${CAP[@]}"} 2> "$WORK/capture-recheck.log" > /dev/null; then
+      DIFF+=(--recheck "$WORK/shots/before-recheck") SDIFF+=(--recheck "$WORK/shots/before-recheck")
+    else
+      log "re-check capture failed; reporting without it (log: $WORK/capture-recheck.log)"
+    fi
+  fi
+fi
 SUMMARY="$(node "$S/diff.cjs" --before "$WORK/shots/before" --after "$WORK/shots/after" --out "$WORK/report" ${DIFF[@]+"${DIFF[@]}"})"
-node "$S/stylediff.cjs" --before "$WORK/shots/before" --after "$WORK/shots/after" --report "$WORK/report" > /dev/null
+node "$S/stylediff.cjs" --before "$WORK/shots/before" --after "$WORK/shots/after" --report "$WORK/report" ${SDIFF[@]+"${SDIFF[@]}"} > /dev/null
+# Tag each changed area "Flow change" / "Visual only" with a one-line note, on the animation too.
+ANN=(); [ "$(cfg animate)" = false ] && ANN+=(--no-animate)
+node "$S/annotate.cjs" --report "$WORK/report" ${ANN[@]+"${ANN[@]}"} > /dev/null 2> "$WORK/annotate.log" ||
+  log "couldn't annotate the animations; they keep plain BEFORE/AFTER labels (log: $WORK/annotate.log)"
 
 node -e '
 const [out, baseRef, baseSha, headRef, headSha, dirty, basePort, headPort, sb] = process.argv.slice(1);

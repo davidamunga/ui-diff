@@ -79,8 +79,12 @@ In one go, it:
 - starts both dev servers on free ports in their own process groups. Only those are stopped
   afterwards, so the user's other servers are never touched;
 - captures every route × viewport. Mobile uses real device emulation (touch, mobile UA).
-  Animations are frozen and framework dev overlays are hidden;
-- pixel-diffs the screenshots (`results.json`, full-page and zoomed images) and runs a computed-style diff (`measured.md`).
+  Animations are frozen, framework dev overlays are hidden, both sides' page clocks start at
+  the same instant and `Math.random` is seeded;
+- pixel-diffs the screenshots (`results.json`, full-page and zoomed images) and runs a computed-style diff (`measured.md`);
+- loads each changed page on base a second time. Whatever differs between those two loads
+  (carousels, live data, ads) is noise: it's left out of the counts, the zoomed areas and
+  `measured.md`, and painted blue in the diff image. `item.unstable` says how much was ignored.
 
 **Storybook mode** (`--storybook`, or `--stories "button--primary,card--*"` to choose them
 yourself) starts Storybook instead of the dev server, logs which stories it picked and why,
@@ -137,6 +141,29 @@ Guidelines:
   Then contrast failures and small touch targets (under about 44px on mobile).
 - Say "changed", not "intentionally changed". You can see what changed, not why.
 - Keep it proportional. A one-color tweak gets one bullet.
+
+**Flow or visual.** Each changed area's animation carries a tag, **Flow change** or **Visual
+only**, and a one-line note. `run.sh` already filled them in automatically (`🔀 flow:` lines in
+`measured.md` are the flow changes it found: controls added or removed, links pointing
+somewhere new, fields that became required, reordered actions, new or removed pages). Replace
+the automatic notes with your own words where they'd help a reviewer, the same voice as the
+summary. Get the area ids with `node $SKILL/scripts/annotate.cjs --report .ui-diff/report --list`,
+write `.ui-diff/report/notes.json`, and rerun `annotate.cjs` (it redraws the animations):
+
+```json
+{
+  "settings__desktop__light__r3": { "kind": "flow", "note": "Asks for a phone number before SMS alerts can be turned on" },
+  "/settings": "Cards are rounder (12 → 20px corners)",
+  "/pricing": { "kind": "visual", "note": "Headline rewritten" }
+}
+```
+
+- Keys are an area id, a route, or `"*"`; the most specific wins. A bare string for a route
+  or `"*"` only reaches its visual areas, so a page-wide note never hides a flow change.
+- Call it a flow change when what users can do, or the order or place they do it, changed
+  (a new step, field, button or destination), even when it looks small. Set `"kind"` to
+  correct the automatic tag when it's wrong, e.g. a link that only gained a query parameter.
+- Keep notes under about 90 characters; the bar shows two lines.
 
 Then run `node $SKILL/scripts/viewer.cjs --report .ui-diff/report` to refresh the local review page (`report/index.html`: slider, side by side, diff overlay, summary on top) and offer to open it for the user (`open` on macOS, `xdg-open` on Linux).
 

@@ -26,7 +26,10 @@ Saves what you'd otherwise rediscover every run. Everything is optional.
   "storageState": ".ui-diff/auth.json",
   "checks": { "tapTargets": false, "ignore": [".carousel", "#chat-widget"], "ignoreRules": ["link-name"] },
   "post": "comment",
-  "requireApproval": false
+  "requireApproval": false,
+  "clock": "2025-06-01T12:00:00Z",
+  "seedRandom": true,
+  "recheck": true
 }
 ```
 
@@ -49,6 +52,9 @@ Saves what you'd otherwise rediscover every run. Everything is optional.
 | `colorSchemes` | `["light"]` by default. Add `"dark"` if the app supports it. |
 | `storageState` | Playwright auth state for pages behind login (see below). |
 | `checks` | Possible-bug checks run on every capture; only problems that are on head and not on base are reported. `false` turns them all off. Otherwise an object: set any of `textClipping` (text cut off by overflow, ellipsis or line clamp), `pageOverflow` (sideways scroll), `overlap` (text/controls overlapping), `offscreen` (controls pushed out of view or squashed to 0), `tapTargets` (under 24×24px, mobile viewports only), `a11y` (axe-core WCAG 2 A/AA rules) to `false`; `ignore`: selectors whose elements (and descendants) are skipped (`mask` selectors are skipped too); `ignoreRules`: axe rule ids to skip. Color contrast is always measured by the style diff instead of axe. |
+| `clock` | When page clocks start: an ISO date (`"2025-06-01T12:00:00Z"`) or ms timestamp, to pin dates for good; `false` to use the real clock. Default: the moment the run starts, the same on base and head, so dates and "5 minutes ago" match. Time keeps running from there, so timers and debounce work. |
+| `seedRandom` | `Math.random` returns the same sequence on base and head (default). `false` to leave it random. `crypto` random values aren't seeded. |
+| `recheck` | Changed pages are loaded on base a second time, and whatever differs between the two loads is ignored as noise (default). The pixels show blue in the diff image; `results.json` items get `unstable: { pixels, ignored }`, or `{ sizeChanged: true }` when base doesn't even keep its height. `false` to skip it and save the extra captures. |
 | `post` | Default destination: `"comment"`, `"description"` or `"manual"`. |
 | `requireApproval` | `true` if the repo gates UI changes on a design sign-off (the Action's `require-approval` with `ui-diff-approve.yml`). The agent then passes `--approval` to `comment.cjs`, which adds a "Design approved" box tied to the head commit. |
 | `animate` | `false` to skip the animated before ⇄ after image of each changed area (an APNG that flips between a grey "BEFORE" and a violet "AFTER" frame). On by default; the comment then shows the animations first and folds the still before/after pairs into a collapsed block. `comment.cjs --no-animate` drops them from one comment only. |
@@ -70,7 +76,9 @@ branch, and in a public repo that makes them public.
 
 ## Noise control
 
-When an unchanged page shows up as changed, it's almost always one of:
+Dates, `Math.random` and content that changes on every load are handled automatically (see
+`clock`, `seedRandom` and `recheck` above). If an unchanged page still shows up as changed,
+it's almost always one of:
 - **Dynamic data** (times, random ids, live API data) → add to `mask`.
 - **Lazy images/fonts still loading** → add `waitFor` on the route or raise `settleMs`.
 - **Carousels / auto-playing video** → `hide`, or `actions` to pause.

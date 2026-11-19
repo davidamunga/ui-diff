@@ -5,9 +5,13 @@
 // Usage:
 //   node capture.cjs --url http://localhost:3001 --out shots/before \
 //     [--routes "/,/settings"] [--config .ui-diff.json] \
-//     [--viewports "desktop:1440x900,mobile:iPhone 13"] [--schemes light,dark]
+//     [--viewports "desktop:1440x900,mobile:iPhone 13"] [--schemes light,dark] \
+//     [--time <epoch ms>] [--only "a__desktop.png,b__mobile.png"] [--no-checks]
 //
 // --routes are added to the config's routes. --viewports/--schemes override the config.
+// --time: the instant the page clock starts at (config "clock" wins; default now). run.sh passes
+// the same value to base and head so dates and "x minutes ago" render the same on both.
+// --only: capture just these output files (run.sh's re-check of changed pages on base).
 // Writes <out>/<name>__<viewport>[__<scheme>].png, a matching .styles.json and .issues.json
 // (possible bugs: clipped text, sideways scroll, overlap, off-screen controls, small tap
 // targets on mobile, axe-core WCAG A/AA violations), and manifest.json.
@@ -33,6 +37,26 @@ const DEV_OVERLAYS = [
   'vite-error-overlay', '#webpack-dev-server-client-overlay', 'astro-dev-toolbar',
   '#nuxt-devtools-container', '#svelte-inspector-host', '.tsqd-parent-container',
 ];
+
+// Same seed on both sides: code that calls Math.random in the same order gets the same numbers.
+function seedRandom(seed) {
+  let t = seed >>> 0;
+  Math.random = () => {
+    t = (t + 0x6d2b79f5) >>> 0;
+    let r = Math.imul(t ^ (t >>> 15), 1 | t);
+    r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r;
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// The instant page clocks start at, or null to leave the real clock alone. Time still flows
+// from there (timers, debounce and animation frames work); it just starts at the same moment.
+function clockStart(cfg, a) {
+  if (cfg.clock === false) return null;
+  const t = cfg.clock !== undefined ? (typeof cfg.clock === 'number' ? cfg.clock : Date.parse(cfg.clock)) : Number(a.time || Date.now());
+  if (!Number.isFinite(t)) throw new Error(`"clock" must be a date like "2025-06-01T12:00:00Z", a timestamp in ms, or false; got ${JSON.stringify(cfg.clock)}`);
+  return t;
+}
 
 function parseViewports(spec) {
   if (!spec) return null;
@@ -100,6 +124,7 @@ function snapshotStyles() {
   ];
   const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'LINK', 'META', 'BR']);
   const MAX = 4000;
+  const CONTROL = 'a[href], button, input:not([type=hidden]), select, textarea, summary, [role=button], [role=link], [role=checkbox], [role=radio], [role=switch], [role=tab], [role=menuitem]';
   // Normalize any CSS color (rgb, oklch, color(), named) to sRGB via a 1px canvas.
   const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
   const rgbCache = new Map();
@@ -151,6 +176,29 @@ function snapshotStyles() {
       box: [Math.round(r.x + scrollX), Math.round(r.y + scrollY), Math.round(r.width), Math.round(r.height)],
       s,
     };
+    // Controls: what a user can do here, for spotting flow changes (stylediff.cjs).
+    if (el.matches(CONTROL)) {
+      const t = el.tagName.toLowerCase();
+      const fieldLabel = () => {
+        if (el.labels && el.labels[0]) {
+          const l = el.labels[0].cloneNode(true); // the label's own words, not the control's options
+          l.querySelectorAll('input, select, textarea').forEach((n) => n.remove());
+          if (l.textContent.trim()) return l.textContent;
+        }
+        return el.getAttribute('placeholder') || el.getAttribute('name') || '';
+      };
+      const lbl = el.getAttribute('aria-label') ||
+        (['input', 'select', 'textarea'].includes(t) ? fieldLabel() : el.innerText || el.getAttribute('value') || el.getAttribute('title') || '');
+      const ia = { kind: t === 'a' ? 'link' : ['input', 'select', 'textarea'].includes(t) ? 'field' : el.getAttribute('role') || (t === 'summary' ? 'disclosure' : 'button'),
+        label: lbl.replace(/\s+/g, ' ').trim().slice(0, 60) };
+      if (t === 'a') {
+        try { const u = new URL(el.href, location.href); ia.href = u.origin === location.origin ? u.pathname + u.search + u.hash : u.href; } catch {}
+      }
+      if (t === 'input') ia.type = el.type;
+      if (el.disabled || el.getAttribute('aria-disabled') === 'true') ia.disabled = true;
+      if (el.required) ia.required = true;
+      rec.ia = ia;
+    }
     if (text) {
       const fg = toRgba(cs.color);
       const bg = effectiveBg(el);
@@ -163,7 +211,7 @@ function snapshotStyles() {
     }
     out.push(rec);
   }
-  return { truncated: out.length >= MAX, elements: out };
+  return { truncated: out.length >= MAX, dpr: devicePixelRatio, elements: out };
 }
 
 // Runs in the page. Heuristic layout checks; stylediff.cjs keeps only the ones that are new on
@@ -450,7 +498,9 @@ async function main() {
   const settleMs = Number(a.settle ?? cfg.settleMs ?? 300);
   const storageState = cfg.storageState && fs.existsSync(cfg.storageState) ? cfg.storageState : undefined;
   // "checks": false turns them all off; an object turns single checks off and ignores selectors.
-  const checks = cfg.checks === false ? null : { ...(cfg.checks || {}) };
+  const checks = cfg.checks === false || a['no-checks'] ? null : { ...(cfg.checks || {}) };
+  const only = typeof a.only === 'string' ? new Set(a.only.split(',').filter(Boolean)) : null;
+  const clock = clockStart(cfg, a);
   let axeSource = null;
   if (checks && checks.a11y !== false) {
     try { axeSource = fs.readFileSync(require.resolve('axe-core/axe.min.js', { paths: [TOOLS_DIR] }), 'utf8'); } catch {
@@ -472,12 +522,15 @@ async function main() {
         timezoneId: cfg.timezone || 'UTC',
         storageState,
       });
+      if (clock !== null) await context.clock.install({ time: clock });
+      if (cfg.seedRandom !== false) await context.addInitScript(seedRandom, 0x5eed);
       for (const route of routes) {
+        const file = `${route.name}__${vpName}${schemes.length > 1 ? `__${scheme}` : ''}.png`;
+        if (only && !only.has(file)) continue;
         const page = await context.newPage();
         const pageErrors = [];
         page.on('pageerror', (e) => pageErrors.push(String(e.message || e).split('\n')[0]));
         const url = new URL(route.path, a.url).toString();
-        const file = `${route.name}__${vpName}${schemes.length > 1 ? `__${scheme}` : ''}.png`;
         const entry = { route: route.label || route.path, name: route.name, viewport: vpName, scheme, file, url };
         const figma = figmaFor(route, vpName, Object.keys(viewports)[0]);
         if (figma) entry.figma = figma;

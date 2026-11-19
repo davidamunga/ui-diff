@@ -17,6 +17,14 @@ function need(name) {
   }
 }
 
+// What the base re-check (run.sh, diff.cjs --recheck) left out of a page, or ''.
+function noiseNote(i) {
+  const u = i.unstable;
+  if (!u) return '';
+  if (u.sizeChanged) return 'base rendered at a different size on a second load, so some of this may be noise';
+  return u.ignored ? `${u.ignored.toLocaleString('en-US')} px that also differ between two loads of base were ignored` : '';
+}
+
 function args(argv = process.argv.slice(2)) {
   const out = { _: [] };
   for (let i = 0; i < argv.length; i++) {
@@ -272,17 +280,41 @@ function withBar(img, text, bg, fg) {
 // Looping before ⇄ after APNG of two crops: grey "BEFORE" bar, then violet "AFTER" bar,
 // ms each. Padded to one size (like padTo) and scaled down to fit maxWidth/maxHeight and,
 // for busy crops, maxBytes (but never below half that size or 360px wide; legible wins).
-function flipApng(before, after, { ms = 1200, maxWidth = 880, maxHeight = 1000, maxBytes = 300e3 } = {}) {
+// bars: { before, after } images to use instead of the built-in labels (annotate.cjs renders
+// them with a tag and a note), made at flipWidth() wide; scaled along with the crops.
+function flipScale(before, after, { maxWidth = 880, maxHeight = 1000 } = {}) {
   const w = Math.max(before.width, after.width);
   const h = Math.max(before.height, after.height);
+  return { w, h, s: Math.min(1, maxWidth / w, maxHeight / h) };
+}
+function flipWidth(before, after, opts) {
+  const { w, s } = flipScale(before, after, opts);
+  return Math.max(1, Math.round(w * s));
+}
+function stack(bar, img) {
+  const out = blank(img.width, img.height + bar.height);
+  PNG().bitblt(bar, out, 0, 0, Math.min(bar.width, img.width), bar.height, 0, 0);
+  PNG().bitblt(img, out, 0, 0, img.width, img.height, 0, bar.height);
+  return out;
+}
+function flipApng(before, after, { ms = 1200, maxWidth = 880, maxHeight = 1000, maxBytes = 300e3, bars = null } = {}) {
+  const { w, h, s: s0 } = flipScale(before, after, { maxWidth, maxHeight });
   const b = padTo(before, w, h);
   const a = padTo(after, w, h);
-  let s = Math.min(1, maxWidth / w, maxHeight / h);
+  let s = s0;
   const minS = Math.max(s / 2, Math.min(s, 360 / w));
   for (;;) {
     const fb = s < 1 ? downscale(b, s) : b;
     const fa = s < 1 ? downscale(a, s) : a;
-    const buf = encodeApng([
+    const bar = (side) => {
+      const img = bars[side];
+      const scaled = s < s0 ? downscale(img, s / s0) : img;
+      return padTo(scaled, fb.width, scaled.height);
+    };
+    const buf = encodeApng(bars ? [
+      { img: stack(bar('before'), fb), ms },
+      { img: stack(bar('after'), fa), ms },
+    ] : [
       { img: withBar(fb, 'BEFORE', '#e5e7eb', '#374151'), ms },
       { img: withBar(fa, 'AFTER', '#7c3aed', '#ffffff'), ms },
     ]);
@@ -291,4 +323,4 @@ function flipApng(before, after, { ms = 1200, maxWidth = 880, maxHeight = 1000, 
   }
 }
 
-module.exports = { TOOLS_DIR, need, args, slug, readPng, writePng, blank, padTo, crop, findRegions, crc32, encodeApng, flipApng };
+module.exports = { noiseNote, TOOLS_DIR, need, args, slug, readPng, writePng, blank, padTo, crop, findRegions, crc32, encodeApng, flipApng, flipWidth };

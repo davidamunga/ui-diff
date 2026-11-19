@@ -19,7 +19,7 @@
 // head commit when anything changed; --no-checkbox says to use the label instead.
 const fs = require('fs');
 const path = require('path');
-const { args } = require('./lib.cjs');
+const { args, noiseNote } = require('./lib.cjs');
 
 const a = args();
 if (!a.report) {
@@ -45,6 +45,24 @@ const img = (rel, alt, width) => `<img src="${url(rel)}" alt="${alt}"${width ? `
 const label = (i) => [i.viewport, i.scheme && i.scheme !== 'light' ? i.scheme : null].filter(Boolean).join(' · ');
 const warn = (i) => (i.warnings || []).map((w) => `> ⚠️ ${w}`);
 const STATIC = '<details><summary>Before | After (still)</summary>\n';
+// Tag + note per changed area (annotate.cjs / stylediff.cjs), shown under its animation.
+const tag = (kind) => (kind === 'flow' ? '🔀 **Flow change**' : 'Visual only');
+const caption = (r, n) => {
+  const t = r.annotation;
+  if (!t) return '';
+  return `<sub>${String(n).includes(',') ? 'Areas' : 'Area'} ${n}: ${tag(t.kind)}${t.note ? ` · ${t.note.replace(/[<>|]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '|': '&#124;' })[c])}` : ''}</sub>`;
+};
+// Flow changes across the report, grouped by route ("New button …", "Link … now goes to …").
+function flowLines() {
+  const by = new Map();
+  for (const i of items) {
+    if (!i.flow || i.flow.kind !== 'flow') continue;
+    const k = i.route || i.name;
+    if (!by.has(k)) by.set(k, new Set());
+    for (const c of i.flow.changes) by.get(k).add(c);
+  }
+  return [...by].map(([route, set]) => `- \`${route}\` — ${[...set].slice(0, 4).join('; ')}${set.size > 4 ? `; …and ${set.size - 4} more` : ''}`);
+}
 // Possible bugs new on head (stylediff.cjs), each with a zoom of the head screenshot.
 const newProblems = (i) => (i.issues ? i.issues.new : []);
 const problemCount = items.reduce((n, i) => n + newProblems(i).length, 0);
@@ -139,6 +157,9 @@ function autoSummary() {
   const out = ['<sub>🤖 Automatic summary from measured changes; not written or reviewed by a person.</sub>', ''];
   if (!what.length && !look.size && !probs.size) return [...out, 'No visual changes on the checked pages.'].join('\n');
   if (what.length) out.push('**What changed**', ...cap(what), '');
+  const flows = flowLines();
+  if (flows.length) out.push('**🔀 Flow changes** <sub>what users can do or where they go</sub>', ...cap(flows), '');
+  else if (what.length) out.push('<sub>Visual only: no controls, links, fields or pages were added, removed or retargeted.</sub>', '');
   if (look.size || probs.size) {
     const where = (f) => `${few(new Set([...f.routes].map((r) => `\`${r}\``)), 4)} (${vps(f.items)})`;
     const pl = [...probs].sort(([, x], [, y]) => y.layout - x.layout).map(([line, f]) => `- ⚠️ ${line} — ${where(f)}`);
@@ -177,11 +198,29 @@ if (a.approval) {
 
 for (const i of items.filter((x) => x.status === 'changed')) {
   const size = i.sizeChanged ? ` · height ${i.before.height}→${i.after.height}px` : '';
-  out.push(`### \`${i.route || i.name}\` — ${label(i)}`, `<sub>${i.percent}% of pixels changed${size}</sub>`, '', ...warn(i), ...problems(i));
+  const noise = noiseNote(i);
+  const flowTag = i.flow ? ` · ${i.flow.kind === 'flow' ? '🔀 flow change' : 'visual only'}` : '';
+  out.push(`### \`${i.route || i.name}\` — ${label(i)}`, `<sub>${i.percent}% of pixels changed${size}${noise ? ` · ${noise}` : ''}${flowTag}</sub>`, '', ...warn(i), ...problems(i));
   const zoomed = (i.regions || []).filter((r) => r.zoom);
   // Animated before ⇄ after first; the static pairs move into a collapsed block.
   const flips = a['no-animate'] ? [] : zoomed.filter((r) => r.zoom.flip);
-  if (flips.length) out.push(flips.map((r, n) => img(r.zoom.flip, `area ${n + 1}: before, then after (animated)`)).join(' '), '', STATIC);
+  if (flips.length) {
+    if (flips.some((r) => r.annotation)) {
+      // Areas with the same tag and note share one caption; flow changes lead.
+      const groups = new Map();
+      flips.forEach((r, n) => {
+        const k = r.annotation ? `${r.annotation.kind}\u0000${r.annotation.note}` : '';
+        if (!groups.has(k)) groups.set(k, { r, ns: [] });
+        groups.get(k).ns.push(n);
+      });
+      const order = [...groups.values()].sort((x, y) => ((y.r.annotation || {}).kind === 'flow') - ((x.r.annotation || {}).kind === 'flow'));
+      for (const g of order) {
+        out.push(g.ns.map((n) => img(flips[n].zoom.flip, `area ${n + 1}: before, then after (animated)`)).join(' '));
+        out.push(caption(g.r, g.ns.length > 1 ? g.ns.map((n) => n + 1).join(', ') : g.ns[0] + 1), '');
+      }
+      out.push(STATIC);
+    } else out.push(flips.map((r, n) => img(r.zoom.flip, `area ${n + 1}: before, then after (animated)`)).join(' '), '', STATIC);
+  } else if (zoomed.some((r) => r.annotation)) out.push(...zoomed.map((r, n) => caption(r, n + 1)), '');
   if (zoomed.length) {
     out.push('| Before | After |', '|---|---|');
     for (const r of zoomed) out.push(`| ${img(r.zoom.before, 'before')} | ${img(r.zoom.after, 'after')} |`);
@@ -237,7 +276,7 @@ if (errors.length) {
 const same = items.filter((x) => x.status === 'unchanged');
 if (same.length) {
   out.push(`<details><summary>No visual change (${same.length})</summary>`, '');
-  for (const i of same) out.push(`- \`${i.route || i.name}\` — ${label(i)}${i.warnings ? ` ⚠️ ${i.warnings.join('; ')}` : ''}`);
+  for (const i of same) out.push(`- \`${i.route || i.name}\` — ${label(i)}${noiseNote(i) ? ` (${noiseNote(i)})` : ''}${i.warnings ? ` ⚠️ ${i.warnings.join('; ')}` : ''}`);
   out.push('', '</details>', '');
 }
 

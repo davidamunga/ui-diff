@@ -2,7 +2,10 @@
 // Measured (not eyeballed) design changes: compares the computed-style snapshots that
 // capture.cjs saved next to each screenshot, for every screenshot diff.cjs marked "changed".
 //
-// Usage: node stylediff.cjs --before shots/before --after shots/after --report report
+// Usage: node stylediff.cjs --before shots/before --after shots/after --report report [--recheck shots/before-recheck]
+//
+// --recheck: a second capture of base. Elements whose text, styles or box already differ between
+// the two base loads (a clock, a rotating quote) are noise and left out of the comparison.
 //
 // Adds item.measured to report/results.json and writes report/measured.md, a readable
 // digest used to write the summary. Elements are matched by DOM path + text/identity, so:
@@ -12,6 +15,9 @@
 // Also compares the possible-bug checks (<file>.issues.json) for every captured page and keeps
 // only problems that are new on head: item.issues = { new: [{type, line, zoom?}], existing, omitted },
 // with a crop of the head screenshot around each layout problem in report/issues/.
+// Flow vs visual: item.flow = { kind: 'flow'|'visual', changes: [lines] } (controls added/removed,
+// link targets, disabled/required, field types, reordered actions, pages added/removed), and each
+// changed region gets region.annotation = { kind, note, source: 'auto' } for annotate.cjs.
 const fs = require('fs');
 const path = require('path');
 const { args, readPng, writePng, crop } = require('./lib.cjs');
@@ -93,8 +99,27 @@ function match(before, after) {
   return { pairs, removed: restB, added: restA };
 }
 
-function compare(b, a) {
-  const { pairs, removed, added } = match(b.elements, a.elements);
+// Base elements that differ between two loads of base, or only show up in one of them.
+function noisyElements(b, again) {
+  const noisy = new Set();
+  const { pairs, removed } = match(b.elements, again.elements);
+  for (const [x, z] of pairs) {
+    const vx = styleView(x.s);
+    const vz = styleView(z.s);
+    // Size, not position: one jumpy banner shouldn't make everything below it noise.
+    const resized = Math.abs(x.box[2] - z.box[2]) >= 3 || Math.abs(x.box[3] - z.box[3]) >= 3;
+    if (x.text !== z.text || resized || Object.keys({ ...vx, ...vz }).some((p) => vx[p] !== vz[p])) noisy.add(x);
+  }
+  for (const x of removed) noisy.add(x);
+  return noisy;
+}
+
+function compare(b, a, noisy = new Set()) {
+  const matchedAll = match(b.elements, a.elements);
+  const pairs = matchedAll.pairs.filter(([x]) => !noisy.has(x));
+  const ignored = matchedAll.pairs.length - pairs.length;
+  const removed = matchedAll.removed.filter((x) => !noisy.has(x));
+  const { added } = matchedAll;
   const styleGroups = new Map();
   const moves = new Map();
   const resizes = [];
@@ -149,6 +174,7 @@ function compare(b, a) {
     removedCount: removed.length,
     contrast: contrast.slice(0, MAX_LINES),
     truncated: !!(a.truncated || b.truncated),
+    ...(ignored ? { ignored } : {}),
   };
 }
 
@@ -203,6 +229,7 @@ function lines(m) {
   for (const c of m.contrast) {
     out.push(`⚠️ contrast ${c.ratio}:1 (needs ${c.min}:1): ${c.el}, ${c.fg} on ${c.bg}${c.was ? ` (was ${c.was}:1)` : ''}`);
   }
+  if (m.ignored) out.push(`(${m.ignored} el left out: they also differ between two loads of base)`);
   if (m.truncated) out.push('(page has >4000 visible elements; only the first 4000 were compared)');
   return out;
 }
@@ -335,6 +362,119 @@ function checkItem(item, a) {
   if (all.length > kept.length) item.issues.omitted = all.length - kept.length;
 }
 
+
+// --- flow changes ---------------------------------------------------------------------
+// A "flow change" alters what a user can do or where they end up, not just how it looks:
+// controls (links, buttons, fields) added or removed, a link pointing somewhere else, a control
+// becoming disabled or required, a field changing type, actions reordered, a page added or
+// removed. Everything else is "visual only". Built from the `ia` records capture.cjs keeps.
+const q = (t) => `"${t.length > 40 ? t.slice(0, 39) + '…' : t}"`;
+function describeFlow(c) {
+  const what = c.label ? `${c.kind} ${q(c.label)}` : c.kind;
+  switch (c.type) {
+    case 'added': return `New ${what}${c.href ? ` → ${c.href}` : ''}`;
+    case 'removed': return `Removed ${what}`;
+    case 'target': return `${c.label ? q(c.label) : 'Link'} now goes to ${c.to} (was ${c.from})`;
+    case 'state': return `${c.label ? q(c.label) : `A ${c.kind}`} is now ${c.to}`;
+    case 'field-type': return `Field ${c.label ? q(c.label) + ' ' : ''}changed type: ${c.from} → ${c.to}`;
+    case 'reorder': return `Reordered actions: ${c.labels.map(q).join(', ')}`;
+    case 'page-added': return 'New page';
+    case 'page-removed': return 'Page removed';
+    default: return c.type;
+  }
+}
+
+function flowChanges(b, a, noisy = new Set()) {
+  const { pairs, added, removed } = match(b.elements, a.elements);
+  const out = [];
+  const ctl = (e, box, extra) => ({ kind: e.ia.kind, label: e.ia.label, box, ...extra });
+  for (const y of added) if (y.ia) out.push({ type: 'added', ...ctl(y, y.box, y.ia.href ? { href: y.ia.href } : {}) });
+  for (const x of removed) if (x.ia && !noisy.has(x)) out.push({ type: 'removed', ...ctl(x, x.box) });
+  const both = [];
+  for (const [x, y] of pairs) {
+    if (noisy.has(x)) continue;
+    if (x.ia && !y.ia) { out.push({ type: 'removed', ...ctl(x, x.box) }); continue; }
+    if (!x.ia && y.ia) { out.push({ type: 'added', ...ctl(y, y.box) }); continue; }
+    if (!x.ia) continue;
+    both.push([x, y]);
+    const c = (type, extra) => out.push({ type, ...ctl(y, y.box, extra) });
+    if ((x.ia.href || '') !== (y.ia.href || '')) c('target', { from: x.ia.href || 'nowhere', to: y.ia.href || 'nowhere' });
+    if (!!x.ia.disabled !== !!y.ia.disabled) c('state', { to: y.ia.disabled ? 'disabled' : 'enabled' });
+    if (!!x.ia.required !== !!y.ia.required) c('state', { to: y.ia.required ? 'required' : 'optional' });
+    if (x.ia.type && y.ia.type && x.ia.type !== y.ia.type) c('field-type', { from: x.ia.type, to: y.ia.type });
+  }
+  // Reordered: two controls under the same parent whose document order flipped.
+  const idxB = new Map(b.elements.map((e, i) => [e, i]));
+  const idxA = new Map(a.elements.map((e, i) => [e, i]));
+  const groups = new Map();
+  for (const pr of both) {
+    const parent = pr[1].path.split('>').slice(0, -1).join('>');
+    if (!groups.has(parent)) groups.set(parent, []);
+    groups.get(parent).push(pr);
+  }
+  for (const g of groups.values()) {
+    if (g.length < 2) continue;
+    const byBase = [...g].sort((p, r) => idxB.get(p[0]) - idxB.get(r[0]));
+    const byHead = [...g].sort((p, r) => idxA.get(p[1]) - idxA.get(r[1]));
+    if (byBase.some((p, i) => p !== byHead[i])) {
+      const moved = byHead.filter((p, i) => p !== byBase[i]).map((p) => p[1]);
+      const box = moved.map((e) => e.box).reduce((u, r) => [Math.min(u[0], r[0]), Math.min(u[1], r[1]), Math.max(u[0] + u[2], r[0] + r[2]) - Math.min(u[0], r[0]), Math.max(u[1] + u[3], r[1] + r[3]) - Math.min(u[1], r[1])]);
+      out.push({ type: 'reorder', kind: 'actions', labels: moved.map((e) => e.ia.label).filter(Boolean).slice(0, 4), box });
+    }
+  }
+  return out;
+}
+
+// What one changed area shows, in a line: its flow changes first, else the most telling
+// visual change inside it (copy, then the most common style change, then a layout shift).
+function regionNote(region, dpr, flows, b, a, noisy) {
+  const hit = (box) => box && box[0] * dpr < region.x + region.width && (box[0] + box[2]) * dpr > region.x &&
+    box[1] * dpr < region.y + region.height && (box[1] + box[3]) * dpr > region.y;
+  const mine = flows.filter((c) => hit(c.box));
+  if (mine.length) {
+    // Focus: the changed controls (device px, padded, inside the region), so annotate.cjs can
+    // still animate a flow change that sits in an area too big for a zoom.
+    const PAD = 120 * dpr; // enough context to see what came before and after it
+    const bx = mine.map((c) => c.box);
+    const x0 = Math.max(region.x, Math.min(...bx.map((b) => b[0] * dpr)) - PAD);
+    const y0 = Math.max(region.y, Math.min(...bx.map((b) => b[1] * dpr)) - PAD);
+    const x1 = Math.min(region.x + region.width, Math.max(...bx.map((b) => (b[0] + b[2]) * dpr)) + PAD);
+    const y1 = Math.min(region.y + region.height, Math.max(...bx.map((b) => (b[1] + b[3]) * dpr)) + PAD);
+    return { kind: 'flow', note: describeFlow(mine[0]) + (mine.length > 1 ? ` (+${mine.length - 1} more)` : ''), changes: mine.map(describeFlow),
+      focus: { x: Math.round(x0), y: Math.round(y0), width: Math.round(x1 - x0), height: Math.round(y1 - y0) }, source: 'auto' };
+  }
+  const { pairs, added, removed } = match(b.elements, a.elements);
+  const inside = pairs.filter(([x, y]) => !noisy.has(x) && hit(y.box));
+  const copy = inside.find(([x, y]) => x.text !== y.text && x.text && y.text);
+  if (copy) return { kind: 'visual', note: `Copy: ${q(copy[0].text)} → ${q(copy[1].text)}`, source: 'auto' };
+  const groups = new Map();
+  for (const [x, y] of inside) {
+    const vx = styleView(x.s), vy = styleView(y.s);
+    for (const p of Object.keys(vy)) {
+      if (vx[p] === undefined || vx[p] === vy[p]) continue;
+      const k = `${p}: ${pretty(vx[p])} → ${pretty(vy[p])}`;
+      groups.set(k, (groups.get(k) || 0) + 1);
+    }
+  }
+  const top = [...groups].sort((m, n) => n[1] - m[1])[0];
+  if (top) return { kind: 'visual', note: `Style: ${top[0]}${groups.size > 1 ? ` (+${groups.size - 1} more)` : ''}`, source: 'auto' };
+  const moved = inside.find(([x, y]) => Math.abs(x.box[1] - y.box[1]) >= 2 || Math.abs(x.box[0] - y.box[0]) >= 2);
+  if (moved) {
+    const dy = moved[1].box[1] - moved[0].box[1];
+    return { kind: 'visual', note: dy ? `Layout: content moved ${dy > 0 ? 'down' : 'up'} ${Math.abs(dy)}px` : 'Layout: content moved sideways', source: 'auto' };
+  }
+  if (added.some((y) => hit(y.box))) return { kind: 'visual', note: 'New content in this area', source: 'auto' };
+  if (removed.some((x) => hit(x.box))) return { kind: 'visual', note: 'Content removed from this area', source: 'auto' };
+  return { kind: 'visual', note: 'Visual change (images, canvas or rendering)', source: 'auto' };
+}
+
+function annotateItem(item, b, a, noisy) {
+  const flows = flowChanges(b, a, noisy);
+  item.flow = { kind: flows.length ? 'flow' : 'visual', changes: flows.map(describeFlow) };
+  const dpr = a.dpr || b.dpr || 1;
+  for (const r of item.regions || []) r.annotation = regionNote(r, dpr, flows, b, a, noisy);
+}
+
 function main() {
   const a = args();
   if (!a.before || !a.after || !a.report) {
@@ -352,6 +492,7 @@ function main() {
         ...item.issues.new.map((p) => `- ⚠️ ${p.line}${p.zoom ? ` (zoom: \`${p.zoom}\`)` : ''}`),
         ...(item.issues.omitted ? [`- …and ${item.issues.omitted} more`] : []), '');
     }
+    if (item.status === 'added' || item.status === 'removed') item.flow = { kind: 'flow', changes: [describeFlow({ type: `page-${item.status}` })] };
     if (item.status === 'added') {
       const snap = load(a.after, item.file);
       const issues = snap ? newPageContrast(snap) : [];
@@ -365,8 +506,10 @@ function main() {
     const b = load(a.before, item.file);
     const af = load(a.after, item.file);
     if (!b || !af) continue;
-    item.measured = compare(b, af);
-    item.measured.lines = lines(item.measured);
+    const again = a.recheck ? load(a.recheck, item.file) : null;
+    item.measured = compare(b, af, again ? noisyElements(b, again) : undefined);
+    annotateItem(item, b, af, again ? noisyElements(b, again) : new Set());
+    item.measured.lines = [...item.flow.changes.map((l) => `🔀 flow: ${l}`), ...lines(item.measured)];
     md.push(`## ${item.route || item.name} — ${item.viewport}${item.scheme && item.scheme !== 'light' ? ` · ${item.scheme}` : ''}`, '');
     md.push(...(item.measured.lines.length ? item.measured.lines.map((l) => `- ${l}`) : ['- No computed-style differences; the pixel change is from images, canvas, or content outside the DOM.']), '');
   }

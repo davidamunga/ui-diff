@@ -213,6 +213,21 @@ node "$S/capture.cjs" --url "http://localhost:$CK_PORT" --out "$TMP/ck2" --route
 kill "$CK_PID" 2>/dev/null
 expect "$TMP/ck2/home__desktop.issues.json" "$FX"' !fx("a11y").length && !fx("textClipping").length && !fx("offscreen").length && fx("overlap").length === 1'"$XF" "config: checks turned off and selectors ignored"
 
+section "unit: frozen clock and seeded Math.random (capture.cjs on tests/fixtures/noise)"
+python3 -m http.server "$CK_PORT" --directory "$FIX/noise" >/dev/null 2>&1 &
+CK_PID=$!
+for _ in $(seq 1 50); do curl -s -o /dev/null "http://localhost:$CK_PORT/clock.html" && break; sleep 0.1; done
+CLK=(--url "http://localhost:$CK_PORT" --routes /clock.html --viewports "desktop:800x600" --no-checks)
+node "$S/capture.cjs" "${CLK[@]}" --out "$TMP/clk1" --time "$(node -e 'console.log(Date.parse("2001-02-03T04:05:00Z"))')" > /dev/null 2>&1
+node "$S/capture.cjs" "${CLK[@]}" --out "$TMP/clk2" > /dev/null 2>&1
+printf '{"clock":false,"seedRandom":false}' > "$TMP/clk-off.json"
+node "$S/capture.cjs" "${CLK[@]}" --out "$TMP/clk3" --config "$TMP/clk-off.json" > /dev/null 2>&1
+kill "$CK_PID" 2>/dev/null
+TXT='d.elements.map((e) => e.text).join("|")'
+expect "$TMP/clk1/clock-html__desktop.styles.json" "has($TXT, \"now 2001-02-03T04:05\")" "--time sets the page clock"
+check "same seed → same Math.random values on two loads" test "$(node -e 'const t=(f)=>require(f).elements.map((e)=>e.text).find((x)=>x.startsWith("rand"));console.log(t(process.argv[1])===t(process.argv[2]))' "$TMP/clk1/clock-html__desktop.styles.json" "$TMP/clk2/clock-html__desktop.styles.json")" = true
+check '"clock": false and "seedRandom": false leave the real clock and Math.random alone' test "$(node -e 'const t=(f,p)=>require(f).elements.map((e)=>e.text).find((x)=>x.startsWith(p));const [a,b]=process.argv.slice(1);console.log(t(b,"now")!==t(a,"now")&&t(b,"rand")!==t(a,"rand"))' "$TMP/clk1/clock-html__desktop.styles.json" "$TMP/clk3/clock-html__desktop.styles.json")" = true
+
 section "unit: changed files → routes (routes.cjs, every framework convention)"
 node "$HERE/routes-unit.cjs" "$S" "$FIX/routes" > "$TMP/routes-unit.out" 2>&1
 cat "$TMP/routes-unit.out"
@@ -265,6 +280,32 @@ check "unrelated server still running" kill -0 "$BYSTANDER"
 check "temporary worktree removed" no_extra_worktrees "$REPO"
 check "working tree untouched" tree_clean "$REPO"
 check ".ui-diff/ ignored locally" grep -qxF '.ui-diff/' "$REPO/.git/info/exclude"
+
+section "e2e: flow vs visual tags on each animation (stylediff.cjs + annotate.cjs)"
+expect "$R/results.json" '((f) => f.kind === "flow" && f.changes.some((c) => c === "New link \"Share\" → /pricing.html#share"))(item(d, "pricing-html__desktop.png").flow)' "new Share link on /pricing.html → flow change, with its target"
+expect "$R/results.json" 'item(d, "home__desktop.png").flow.kind === "visual"' "style-only change on / → visual only"
+expect "$R/results.json" 'item(d, "new-html__desktop.png").flow.changes.join() === "New page"' "page only on head → flow change: new page"
+expect "$R/results.json" 'd.items.flatMap((i) => i.regions || []).filter((r) => r.zoom).every((r) => r.annotation && ["flow", "visual"].includes(r.annotation.kind) && r.annotation.note && r.annotation.source === "auto")' "every animated area has an automatic tag and note"
+expect "$R/results.json" 'item(d, "pricing-html__desktop.png").regions.some((r) => r.annotation.kind === "flow" && /Share|Save|button/.test(r.annotation.note))' "the area holding the new controls is tagged flow"
+expect "$R/measured.md" 'has(d, "🔀 flow: New link \"Share\"")' "measured.md lists the flow changes"
+check "annotate.cjs logged nothing" test ! -s "$REPO/.ui-diff/annotate.log"
+FID="$(node "$S/annotate.cjs" --report "$R" --list | node -e 'const l=JSON.parse(require("fs").readFileSync(0,"utf8"));console.log(l.find((r)=>r.kind==="flow"&&r.id.startsWith("pricing-html__desktop")).id)')"
+printf '{ "%s": { "note": "Cards gain share and save actions" }, "/pricing.html": "Pro card highlighted", "/": { "kind": "flow", "note": "Forced flow" } }\n' "$FID" > "$TMP/notes.json"
+node "$S/annotate.cjs" --report "$R" --notes "$TMP/notes.json" > "$TMP/ann.json"
+check "annotate.cjs with a notes file exits 0" test $? = 0
+expect "$R/results.json" '((r) => r.annotation.source === "agent" && r.annotation.kind === "flow" && r.annotation.note === "Cards gain share and save actions" && r.annotation.auto.note)(d.items.flatMap((i) => (i.regions || []).map((r, n) => [i.file.replace(/\.png$/, "") + "__r" + (n + 1), r])).find(([id]) => id === "'"$FID"'")[1])' "region note wins, keeps the automatic one alongside"
+expect "$R/results.json" 'd.items.filter((i) => i.route === "/pricing.html" && i.status === "changed").flatMap((i) => i.regions.filter((r) => r.zoom)).every((r) => r.annotation.kind === "flow" ? r.annotation.note !== "Pro card highlighted" : r.annotation.note === "Pro card highlighted")' "a bare route note reaches visual areas only, never hides a flow note"
+expect "$R/results.json" 'd.items.filter((i) => i.route === "/" && i.status === "changed").flatMap((i) => i.regions.filter((r) => r.zoom)).every((r) => r.annotation.kind === "flow")' "kind in a notes entry re-tags the areas"
+node "$HERE/apng.cjs" "$R/$FLIP" > "$TMP/flip2.json"
+expect "$TMP/flip2.json" 'd.frames === 2 && d.seqOk && d.crcOk && d.framesOk && d.size < 300000' "annotated flip is still a valid, small APNG"
+echo '{ "x": { "kind": "maybe" } }' > "$TMP/bad-notes.json"
+node "$S/annotate.cjs" --report "$R" --notes "$TMP/bad-notes.json" > /dev/null 2> "$TMP/bad-notes.err"
+check "bad kind in notes → exits non-zero" test $? != 0
+expect "$TMP/bad-notes.err" 'has(d, "must be a string or")' "explains the notes format"
+node "$S/comment.cjs" --report "$R" --auto-summary --out "$TMP/flow-comment.md"
+expect "$TMP/flow-comment.md" 'has(d, "🔀 **Flow change** · Cards gain share and save actions") && has(d, "Visual only · Pro card highlighted")' "comment shows each area's tag and note"
+expect "$TMP/flow-comment.md" 'has(d, "**🔀 Flow changes**") && has(d, "`/pricing.html` — New link \"Share\"")' "automatic summary lists flow changes by route"
+node "$S/annotate.cjs" --report "$R" > /dev/null # back to automatic notes for the sections below
 
 section "e2e: local review page (viewer.cjs)"
 check "run.sh prints the review page path" grep -qF "$R/index.html" "$TMP/static.err"
@@ -561,6 +602,24 @@ echo "# notes" > NOTES.md && git add NOTES.md && commit "docs only"
 bash "$S/run.sh" --base HEAD~1 --routes "/,/pricing.html" > /dev/null 2> "$TMP/noop.err"
 check "run.sh exits 0" test $? = 0
 expect "$REPO/.ui-diff/report/results.json" 'd.summary.changed === 0 && d.summary.unchanged === 4' "identical UI gives identical pixels (0 changed)"
+
+section "e2e: noise on base is re-checked and ignored (recheck)"
+cp "$FIX/noise/base/"*.html . && git add -A && commit "live boxes"
+cp "$FIX/noise/head/"*.html . && git add -A && commit "heading color"
+bash "$S/run.sh" --base HEAD~1 --routes "/noisy.html,/quiet.html" --viewports "desktop:1000x700" > /dev/null 2> "$TMP/noise.err"
+check "run.sh exits 0" test $? = 0
+R="$REPO/.ui-diff/report"
+expect "$TMP/noise.err" 'has(d, "re-checking 2 changed capture(s) on base")' "re-captures the two pages that differ"
+expect "$R/results.json" 'item(d, "quiet-html__desktop.png").status === "unchanged" && item(d, "quiet-html__desktop.png").unstable.ignored > 0' "page whose only change is base noise → unchanged, with the noise counted"
+expect "$R/results.json" '((i) => i.status === "changed" && i.unstable.ignored > 0 && i.regions.length === 1 && i.regions[0].y > 300)(item(d, "noisy-html__desktop.png"))' "real change still reported; the noisy box isn't one of its areas"
+expect "$R/results.json" '((m) => m.styles.some((g) => g.prop === "color" && g.to === "#be123c") && !m.styles.some((g) => g.prop === "background-color") && !m.copy.length && m.ignored > 0)(item(d, "noisy-html__desktop.png").measured)' "measured: heading color kept, the box's random color and text left out"
+expect "$R/results.json" 'd.summary.changed === 1 && d.summary.unstable === 2' "summary counts 1 changed, 2 with noise"
+node "$S/comment.cjs" --report "$R" --base-url https://example.test > "$TMP/noise.md" 2>/dev/null
+expect "$TMP/noise.md" 'has(d, "that also differ between two loads of base were ignored")' "comment says how much noise was ignored"
+printf '{"recheck":false}' > "$TMP/norecheck.json"
+bash "$S/run.sh" --base HEAD~1 --routes "/quiet.html" --viewports "desktop:1000x700" --config "$TMP/norecheck.json" > /dev/null 2> "$TMP/norecheck.err"
+expect "$R/results.json" 'item(d, "quiet-html__desktop.png").status === "changed" && !d.summary.unstable' '"recheck": false → noise reported as a change'
+git rm -q noisy.html quiet.html && commit "drop live boxes"
 
 section "e2e: uncommitted changes are labelled"
 echo '.card h3 { letter-spacing: 0.05em; }' >> style.css
