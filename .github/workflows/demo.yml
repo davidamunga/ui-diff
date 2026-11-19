@@ -1,0 +1,54 @@
+# Runs ui-diff (this checkout's action, not a release) on PRs that change the demo app,
+# so example PRs show what the comment looks like. See examples/demo-app/README.md.
+name: UI diff (demo app)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    paths: ['examples/demo-app/**']
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: ui-diff-demo-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  ui-diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      # The PR that adds the demo app has nothing to compare against on base.
+      - id: base
+        run: |
+          if git cat-file -e "${{ github.event.pull_request.base.sha }}:examples/demo-app/package.json" 2>/dev/null; then
+            echo "has-app=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::base has no examples/demo-app yet; skipping ui-diff"
+          fi
+      - uses: actions/setup-node@v4
+        if: steps.base.outputs.has-app == 'true' && github.event.action != 'closed'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: examples/demo-app/package-lock.json
+      - if: steps.base.outputs.has-app == 'true' && github.event.action != 'closed'
+        run: npm ci --no-audit --no-fund
+        working-directory: examples/demo-app
+      # `closed` removes the PR's screenshots from the assets branch.
+      - uses: ./
+        if: steps.base.outputs.has-app == 'true'
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.base.outputs.has-app == 'true' && github.event.action != 'closed'
+        with:
+          name: ui-diff-report
+          path: |
+            .ui-diff/report
+            .ui-diff/*.log
+          include-hidden-files: true
+          if-no-files-found: ignore

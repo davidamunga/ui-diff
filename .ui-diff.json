@@ -1,0 +1,6 @@
+{
+  "appDir": "examples/demo-app",
+  "devCommand": "cd examples/demo-app && { [ -d node_modules ] || npm ci --no-audit --no-fund; } && npm run dev -- --port {port} --strictPort",
+  "viewports": { "desktop": { "width": 1440, "height": 900 }, "mobile": { "device": "iPhone 13" } },
+  "colorSchemes": ["light", "dark"]
+}

@@ -323,6 +323,7 @@ install.sh                      install for every detected agent
 action.yml                      GitHub Action (runs action/ci.sh)
 action/ci.sh                    the pipeline with no agent: run → publish → comment → post, or prune
 examples/workflows/             workflows to copy: ui-diff.yml, ui-diff-cleanup.yml, ui-diff-approve.yml
+examples/demo-app/              sample React app for example PRs (not installed with the skill)
 skills/ui-diff/
 ├── SKILL.md                    the workflow the agent follows
 ├── LICENSE.txt                 MIT (a copy that travels with the skill folder)

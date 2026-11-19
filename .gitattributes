@@ -1,0 +1,3 @@
+# Leave the demo app out of release tarballs and the Action download.
+examples/demo-app export-ignore
+.ui-diff.json export-ignore
