@@ -15,7 +15,7 @@ export default function Pricing() {
   return (
     <section className="container section">
       <div className="page-head">
-        <h1>Simple pricing</h1>
+        <h1>Pricing that grows with your crew</h1>
         <p className="lead">Pay for the sensors you watch. Every plan includes the full dashboard.</p>
       </div>
       <div className="grid grid-3 pricing">
