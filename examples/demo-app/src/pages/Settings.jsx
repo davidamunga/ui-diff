@@ -18,6 +18,10 @@ export default function Settings() {
             <input type="email" defaultValue="sam@example.com" />
           </label>
           <label className="field">
+            <span>Phone (for SMS alerts)</span>
+            <input type="tel" required placeholder="+1 555 0100" />
+          </label>
+          <label className="field">
             <span>Home station</span>
             <select defaultValue="kelp">
               <option value="north">North Pier</option>

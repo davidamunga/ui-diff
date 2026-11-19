@@ -24,7 +24,7 @@ export default function Layout() {
               </NavLink>
             ))}
           </nav>
-          <a className="button button-small" href="/pricing">Start free</a>
+          <a className="button button-small" href="/signup">Start free</a>
         </div>
       </header>
       <main>
